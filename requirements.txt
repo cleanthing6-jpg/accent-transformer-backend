@@ -4,3 +4,4 @@ python-multipart
 edge-tts
 groq
 imageio-ffmpeg
+deep-translator
