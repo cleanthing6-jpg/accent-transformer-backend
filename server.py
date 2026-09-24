@@ -89,6 +89,53 @@ def _transcribe(path):
 async def health():
     return {"status": "ok"}
 
+
+# ── Voice preview cache + samples ─────────────────────────────
+_preview_cache = {}
+
+PREVIEW_TEXT = {
+    None:   "Hey! This is how I sound. Pretty natural, right?",
+    "fr":   "Salut ! Voilà comment je sonne. Naturel, non ?",
+    "de":   "Hallo! So klinge ich. Ziemlich natürlich, oder?",
+    "es":   "¡Hola! Así sueno. ¿Natural, verdad?",
+    "it":   "Ciao! Ecco come suono. Naturale, vero?",
+    "pt":   "Olá! É assim que eu soo. Natural, né?",
+    "ar":   "مرحبا! هكذا أبدو. طبيعي، أليس كذلك؟",
+    "hi":   "नमस्ते! मैं ऐसी लगती हूँ। सहज, है ना?",
+    "zh-CN":"你好！这就是我的声音。很自然，对吧？",
+    "ja":   "こんにちは！これが私の声です。自然でしょ？",
+    "ko":   "안녕하세요! 이게 제 목소리예요. 자연스럽죠?",
+    "ru":   "Привет! Вот как я звучу. Естественно, да?",
+}
+
+@app.get("/preview")
+async def preview(voice: str):
+    if voice not in VOICES:
+        raise HTTPException(404, f"Unknown voice: {voice}")
+
+    if voice in _preview_cache:
+        return {"audio_b64": _preview_cache[voice], "mime": "audio/ogg"}
+
+    voice_id, target_lang = VOICES[voice]
+    sample = PREVIEW_TEXT.get(target_lang, PREVIEW_TEXT[None])
+
+    clean = tempfile.mktemp(suffix=".wav")
+    try:
+        await _tts(sample, voice_id, clean)
+    except Exception as e:
+        return {"stage": "preview_tts", "error": str(e),
+                "trace": traceback.format_exc()[-1000:]}, 500
+
+    try:
+        with open(_degrade(clean), "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        _preview_cache[voice] = b64
+        return {"audio_b64": b64, "mime": "audio/ogg"}
+    except Exception as e:
+        return {"stage": "preview_ffmpeg", "error": str(e),
+                "trace": traceback.format_exc()[-1000:]}, 500
+
+
 @app.post("/transform")
 async def transform(audio: UploadFile = File(...), profile: str = Form(...)):
     if profile not in VOICES:
