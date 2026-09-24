@@ -1,4 +1,4 @@
-import asyncio, os, subprocess, tempfile, traceback, base64, uuid
+import asyncio, os, subprocess, tempfile, traceback, base64, uuid, re
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,8 +40,6 @@ VOICES = {
     "AU Male · William (Laid-back)":      ("en-AU-WilliamNeural", None),
     "IN Female · Neerja (Warm)":          ("en-IN-NeerjaNeural", None),
     "IN Male · Prabhat (Steady)":         ("en-IN-PrabhatNeural", None),
-    "NG Female · Ezinne (Warm)":          ("en-NG-EzinneNeural", None),
-    "NG Male · Abeo (Steady)":            ("en-NG-AbeoNeural", None),
     "FR Female · Denise":                  ("fr-FR-DeniseNeural", "fr"),
     "FR Male · Henri":                     ("fr-FR-HenriNeural", "fr"),
     "DE Female · Katja":                   ("de-DE-KatjaNeural", "de"),
@@ -66,11 +64,18 @@ VOICES = {
     "RU Male · Dmitry":                    ("ru-RU-DmitryNeural", "ru"),
 }
 
+ENGLISH_VOICES = {
+    "US Female": "en-US-AriaNeural",
+    "US Male":   "en-US-GuyNeural",
+    "UK Female": "en-GB-SoniaNeural",
+    "UK Male":   "en-GB-RyanNeural",
+}
+
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 
-def _save_audio(ogg_path):
+def _save_audio(opus_path):
     aid = str(uuid.uuid4())
-    _audio_store[aid] = ogg_path
+    _audio_store[aid] = opus_path
     _audio_order.append(aid)
     while len(_audio_order) > 50:
         old = _audio_order.pop(0)
@@ -81,52 +86,57 @@ def _save_audio(ogg_path):
     return aid
 
 async def _tts(text, voice, out):
-    """Speak with slower rate for natural pacing."""
-    await edge_tts.Communicate(
-        text, voice,
-        rate="-12%",      # slower = more natural, matches human speech
-        pitch="-2Hz",     # slightly lower = warmer, less robotic
-        volume="+0%",
-    ).save(out)
+    await edge_tts.Communicate(text, voice, rate="-12%", pitch="-2Hz").save(out)
 
 def _degrade(wav_in):
-    """Phone-realistic degradation: band-limit + compression + room tone + mic noise + codec grain."""
     out = tempfile.mktemp(suffix=".opus")
     subprocess.run([
         FFMPEG, "-y",
         "-i", wav_in,
-        # Pink noise = room tone + mic self-noise (louder than before)
-        "-f", "lavfi", "-i", "anoisesrc=color=pink:sample_rate=48000:amplitude=0.4",
-        # Brown noise = low-frequency handling noise
-        "-f", "lavfi", "-i", "anoisesrc=color=brown:sample_rate=48000:amplitude=0.25",
+        "-f", "lavfi", "-i", "anoisesrc=color=pink:sample_rate=48000:amplitude=0.35",
+        "-f", "lavfi", "-i", "anoisesrc=color=brown:sample_rate=48000:amplitude=0.2",
         "-filter_complex",
-        # Voice: narrow to phone band, heavy compression (AGC pumping), subtle room reverb, soft limiter
         "[0:a]highpass=f=250,lowpass=f=3400,"
         "acompressor=threshold=-26dB:ratio=10:attack=5:release=150:makeup=3,"
         "aecho=0.9:0.7:12:0.12,"
         "alimiter=level_in=1:level_out=0.95:limit=0.95[voice];"
-        # Pink noise bed (room tone) at audible level
-        "[1:a]volume=0.03[room];"
-        # Brown noise bed (handling rumble) very subtle
-        "[2:a]volume=0.015[handling];"
-        # Mix all three
-        "[voice][room][handling]amix=inputs=3:duration=first:weights=1 0.8 0.5[out]",
+        "[1:a]volume=0.028[room];"
+        "[2:a]volume=0.012[handling];"
+        "[voice][room][handling]amix=inputs=3:duration=first:weights=1 0.7 0.4[out]",
         "-map", "[out]",
         "-ar", "48000", "-ac", "1",
         "-c:a", "libopus", "-b:a", "24k", "-vbr", "on",
         "-application", "voip", "-compression_level", "10",
-        "-avoid_negative_ts", "make_zero",
         "-map_metadata", "-1",
+        "-avoid_negative_ts", "make_zero",
         out,
     ], check=True, capture_output=True)
     return out
 
-def _transcribe(path):
+def _transcribe(path, lang="en"):
     with open(path, "rb") as f:
-        r = groq_client.audio.transcriptions.create(
-            file=(os.path.basename(path), f.read()),
-            model="whisper-large-v3-turbo", language="en", response_format="text")
-    return r.strip() if isinstance(r, str) else r.text.strip()
+        if lang:
+            r = groq_client.audio.transcriptions.create(
+                file=(os.path.basename(path), f.read()),
+                model="whisper-large-v3-turbo", language=lang, response_format="text")
+            return (r.strip() if isinstance(r, str) else r.text.strip()), lang
+        else:
+            r = groq_client.audio.transcriptions.create(
+                file=(os.path.basename(path), f.read()),
+                model="whisper-large-v3-turbo", response_format="verbose_json")
+            return (r.text or "").strip(), getattr(r, "language", "unknown") or "unknown"
+
+def _translate(text, target):
+    for fn in (
+        lambda: GoogleTranslator(source="en", target=target).translate(text),
+        lambda: __import__("deep_translator").MyMemoryTranslator(source="en-US", target=target).translate(text),
+    ):
+        try:
+            r = fn()
+            if r: return r
+        except Exception:
+            continue
+    return None
 
 PREVIEW_TEXT = {
     None:    "Hey! This is how I sound. Natural, right?",
@@ -166,14 +176,53 @@ async def preview(voice: str):
     try:
         await _tts(sample, voice_id, clean)
     except Exception as e:
-        return {"stage": "preview_tts", "error": str(e), "trace": traceback.format_exc()[-1000:]}, 500
+        return {"stage": "preview_tts", "error": str(e)}, 500
     try:
         opus_file = _degrade(clean)
         aid = _save_audio(opus_file)
         _preview_cache[voice] = aid
         return {"audio_id": aid, "mime": "audio/opus"}
     except Exception as e:
-        return {"stage": "preview_ffmpeg", "error": str(e), "trace": traceback.format_exc()[-1000:]}, 500
+        return {"stage": "preview_ffmpeg", "error": str(e)}, 500
+
+@app.post("/translate-incoming")
+async def translate_incoming(audio: UploadFile = File(...), voice: str = Form("US Female")):
+    if voice not in ENGLISH_VOICES:
+        raise HTTPException(400, f"Unknown voice: {voice}")
+    suffix = os.path.splitext(audio.filename or "in.m4a")[1] or ".m4a"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        f.write(await audio.read())
+        inp = f.name
+    try:
+        try:
+            original, detected = _transcribe(inp, lang=None)
+        except Exception as e:
+            return {"stage": "transcribe", "error": str(e)}, 500
+        if not original:
+            raise HTTPException(400, "No speech detected.")
+        english = original
+        if not str(detected).lower().startswith("en"):
+            t = _translate(original, "en")
+            if t: english = t
+        clean = tempfile.mktemp(suffix=".wav")
+        try:
+            await _tts(english, ENGLISH_VOICES[voice], clean)
+        except Exception as e:
+            return {"stage": "tts", "error": str(e)}, 500
+        try:
+            opus_file = _degrade(clean)
+            aid = _save_audio(opus_file)
+            return {
+                "audio_id": aid, "mime": "audio/opus",
+                "detected_language": detected,
+                "original_text": original,
+                "translated_text": english,
+            }
+        except Exception as e:
+            return {"stage": "ffmpeg", "error": str(e)}, 500
+    finally:
+        try: os.unlink(inp)
+        except: pass
 
 @app.post("/transform")
 async def transform(audio: UploadFile = File(...), profile: str = Form(...)):
@@ -186,62 +235,25 @@ async def transform(audio: UploadFile = File(...), profile: str = Form(...)):
         inp = f.name
     try:
         try:
-            text = _transcribe(inp)
+            text, _ = _transcribe(inp, lang="en")
         except Exception as e:
-            return {"stage": "transcribe", "error": str(e), "trace": traceback.format_exc()[-1000:]}, 500
+            return {"stage": "transcribe", "error": str(e)}, 500
         if not text:
             raise HTTPException(400, "No speech detected.")
         if target_lang:
-            translated = None
-            try:
-                from deep_translator import GoogleTranslator
-                translated = GoogleTranslator(source="en", target=target_lang).translate(text)
-            except Exception:
-                pass
-            if not translated:
-                try:
-                    from deep_translator import MyMemoryTranslator
-                    translated = MyMemoryTranslator(source="en-US", target=target_lang).translate(text)
-                except Exception:
-                    pass
-            if translated:
-                text = translated
-            # If both fail, keep English text — audio still plays
+            t = _translate(text, target_lang)
+            if t: text = t
         clean = tempfile.mktemp(suffix=".wav")
         try:
-            # Split into sentences and add natural pauses
-            import re as _re
-            sentences = [s.strip() for s in _re.split(r'(?<=[.!?])\s+', text) if s.strip()]
-            if len(sentences) > 1:
-                parts = []
-                for i, sent in enumerate(sentences):
-                    part = tempfile.mktemp(suffix=f"_{i}.wav")
-                    await _tts(sent, voice_id, part)
-                    parts.append(part)
-                # Concatenate with 350ms silence between
-                concat_list = tempfile.mktemp(suffix=".txt")
-                with open(concat_list, "w") as f:
-                    for i, part in enumerate(parts):
-                        f.write(f"file '{part}'\n")
-                        if i < len(parts) - 1:
-                            sil = tempfile.mktemp(suffix=f"_sil_{i}.wav")
-                            subprocess.run([FFMPEG, "-y", "-f", "lavfi",
-                                            "-i", "anullsrc=r=24000:cl=mono",
-                                            "-t", "0.35", sil], check=True, capture_output=True)
-                            f.write(f"file '{sil}'\n")
-                subprocess.run([FFMPEG, "-y", "-f", "concat", "-safe", "0",
-                                "-i", concat_list, "-c", "copy", clean],
-                               check=True, capture_output=True)
-            else:
-                await _tts(text, voice_id, clean)
+            await _tts(text, voice_id, clean)
         except Exception as e:
-            return {"stage": "tts", "error": str(e), "trace": traceback.format_exc()[-1000:]}, 500
+            return {"stage": "tts", "error": str(e)}, 500
         try:
             opus_file = _degrade(clean)
             aid = _save_audio(opus_file)
             return {"audio_id": aid, "mime": "audio/opus"}
         except Exception as e:
-            return {"stage": "ffmpeg", "error": str(e), "trace": traceback.format_exc()[-1000:]}, 500
+            return {"stage": "ffmpeg", "error": str(e)}, 500
     finally:
         try: os.unlink(inp)
         except: pass
