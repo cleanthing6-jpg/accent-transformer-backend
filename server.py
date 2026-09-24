@@ -6,6 +6,8 @@ import edge_tts, imageio_ffmpeg
 from groq import Groq
 
 app = FastAPI()
+_audio_store = {}  # audio_id -> file path
+_audio_order = []  # for cleanup
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
@@ -108,13 +110,21 @@ PREVIEW_TEXT = {
     "ru":   "Привет! Вот как я звучу. Естественно, да?",
 }
 
+@app.get("/audio/{audio_id}")
+async def get_audio(audio_id: str):
+    from fastapi.responses import FileResponse
+    path = _audio_store.get(audio_id)
+    if not path or not os.path.exists(path):
+        raise HTTPException(404, "Audio not found or expired")
+    return FileResponse(path, media_type="audio/ogg")
+
 @app.get("/preview")
 async def preview(voice: str):
     if voice not in VOICES:
         raise HTTPException(404, f"Unknown voice: {voice}")
 
-    if voice in _preview_cache:
-        return {"audio_b64": _preview_cache[voice], "mime": "audio/ogg"}
+    if voice in _preview_cache and _preview_cache[voice] in _audio_store:
+        return {"audio_id": _preview_cache[voice], "mime": "audio/ogg"}
 
     voice_id, target_lang = VOICES[voice]
     sample = PREVIEW_TEXT.get(target_lang, PREVIEW_TEXT[None])
@@ -127,10 +137,19 @@ async def preview(voice: str):
                 "trace": traceback.format_exc()[-1000:]}, 500
 
     try:
-        with open(_degrade(clean), "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("ascii")
-        _preview_cache[voice] = b64
-        return {"audio_b64": b64, "mime": "audio/ogg"}
+        ogg = _degrade(clean)
+        aid = str(uuid.uuid4())
+        _audio_store[aid] = ogg
+        _audio_order.append(aid)
+        # cap at 50
+        while len(_audio_order) > 50:
+            old = _audio_order.pop(0)
+            p_ = _audio_store.pop(old, None)
+            if p_ and os.path.exists(p_):
+                try: os.unlink(p_)
+                except: pass
+        _preview_cache[voice] = aid
+        return {"audio_id": aid, "mime": "audio/ogg"}
     except Exception as e:
         return {"stage": "preview_ffmpeg", "error": str(e),
                 "trace": traceback.format_exc()[-1000:]}, 500
