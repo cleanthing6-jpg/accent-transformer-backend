@@ -91,7 +91,7 @@ async def _tts(text, voice, out):
 
 def _degrade(wav_in):
     """Phone-realistic degradation: band-limit + compression + room tone + mic noise + codec grain."""
-    out = tempfile.mktemp(suffix=".ogg")
+    out = tempfile.mktemp(suffix=".opus")
     subprocess.run([
         FFMPEG, "-y",
         "-i", wav_in,
@@ -152,14 +152,14 @@ async def get_audio(audio_id: str):
     path = _audio_store.get(audio_id)
     if not path or not os.path.exists(path):
         raise HTTPException(404, "Audio not found or expired")
-    return FileResponse(path, media_type="audio/ogg")
+    return FileResponse(path, media_type="audio/opus")
 
 @app.get("/preview")
 async def preview(voice: str):
     if voice not in VOICES:
         raise HTTPException(404, f"Unknown voice: {voice}")
     if voice in _preview_cache and _preview_cache[voice] in _audio_store:
-        return {"audio_id": _preview_cache[voice], "mime": "audio/ogg"}
+        return {"audio_id": _preview_cache[voice], "mime": "audio/opus"}
     voice_id, target_lang = VOICES[voice]
     sample = PREVIEW_TEXT.get(target_lang, PREVIEW_TEXT[None])
     clean = tempfile.mktemp(suffix=".wav")
@@ -168,10 +168,10 @@ async def preview(voice: str):
     except Exception as e:
         return {"stage": "preview_tts", "error": str(e), "trace": traceback.format_exc()[-1000:]}, 500
     try:
-        ogg = _degrade(clean)
-        aid = _save_audio(ogg)
+        opus_file = _degrade(clean)
+        aid = _save_audio(opus_file)
         _preview_cache[voice] = aid
-        return {"audio_id": aid, "mime": "audio/ogg"}
+        return {"audio_id": aid, "mime": "audio/opus"}
     except Exception as e:
         return {"stage": "preview_ffmpeg", "error": str(e), "trace": traceback.format_exc()[-1000:]}, 500
 
@@ -237,9 +237,9 @@ async def transform(audio: UploadFile = File(...), profile: str = Form(...)):
         except Exception as e:
             return {"stage": "tts", "error": str(e), "trace": traceback.format_exc()[-1000:]}, 500
         try:
-            ogg = _degrade(clean)
-            aid = _save_audio(ogg)
-            return {"audio_id": aid, "mime": "audio/ogg"}
+            opus_file = _degrade(clean)
+            aid = _save_audio(opus_file)
+            return {"audio_id": aid, "mime": "audio/opus"}
         except Exception as e:
             return {"stage": "ffmpeg", "error": str(e), "trace": traceback.format_exc()[-1000:]}, 500
     finally:
