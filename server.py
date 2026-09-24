@@ -81,25 +81,43 @@ def _save_audio(ogg_path):
     return aid
 
 async def _tts(text, voice, out):
-    await edge_tts.Communicate(text, voice).save(out)
+    """Speak with slower rate for natural pacing."""
+    await edge_tts.Communicate(
+        text, voice,
+        rate="-12%",      # slower = more natural, matches human speech
+        pitch="-2Hz",     # slightly lower = warmer, less robotic
+        volume="+0%",
+    ).save(out)
 
 def _degrade(wav_in):
+    """Phone-realistic degradation: band-limit + compression + room tone + mic noise + codec grain."""
     out = tempfile.mktemp(suffix=".ogg")
     subprocess.run([
         FFMPEG, "-y",
         "-i", wav_in,
-        "-f", "lavfi", "-i", "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+        # Pink noise = room tone + mic self-noise (louder than before)
+        "-f", "lavfi", "-i", "anoisesrc=color=pink:sample_rate=48000:amplitude=0.4",
+        # Brown noise = low-frequency handling noise
+        "-f", "lavfi", "-i", "anoisesrc=color=brown:sample_rate=48000:amplitude=0.25",
         "-filter_complex",
-        "[0:a]highpass=f=200,lowpass=f=3200,"
-        "acompressor=threshold=-22dB:ratio=8:attack=3:release=120:makeup=2,"
-        "aecho=0.85:0.9:8:0.15,"
-        "alimiter=level_in=1:level_out=0.97:limit=0.97[v];"
-        "[1:a]volume=0.012[n];"
-        "[v][n]amix=inputs=2:duration=first:weights=1 1[out]",
+        # Voice: narrow to phone band, heavy compression (AGC pumping), subtle room reverb, soft limiter
+        "[0:a]highpass=f=250,lowpass=f=3400,"
+        "acompressor=threshold=-26dB:ratio=10:attack=5:release=150:makeup=3,"
+        "aecho=0.9:0.7:12:0.12,"
+        "alimiter=level_in=1:level_out=0.95:limit=0.95[voice];"
+        # Pink noise bed (room tone) at audible level
+        "[1:a]volume=0.03[room];"
+        # Brown noise bed (handling rumble) very subtle
+        "[2:a]volume=0.015[handling];"
+        # Mix all three
+        "[voice][room][handling]amix=inputs=3:duration=first:weights=1 0.8 0.5[out]",
         "-map", "[out]",
-        "-ar", "16000", "-ac", "1",
-        "-c:a", "libopus", "-b:a", "16k", "-vbr", "on",
-        "-application", "voip", "-compression_level", "10", out,
+        "-ar", "48000", "-ac", "1",
+        "-c:a", "libopus", "-b:a", "24k", "-vbr", "on",
+        "-application", "voip", "-compression_level", "10",
+        "-avoid_negative_ts", "make_zero",
+        "-map_metadata", "-1",
+        out,
     ], check=True, capture_output=True)
     return out
 
@@ -174,13 +192,48 @@ async def transform(audio: UploadFile = File(...), profile: str = Form(...)):
         if not text:
             raise HTTPException(400, "No speech detected.")
         if target_lang:
+            translated = None
             try:
-                text = GoogleTranslator(source="en", target=target_lang).translate(text) or text
-            except Exception as e:
-                return {"stage": "translate", "error": str(e), "trace": traceback.format_exc()[-1000:]}, 500
+                from deep_translator import GoogleTranslator
+                translated = GoogleTranslator(source="en", target=target_lang).translate(text)
+            except Exception:
+                pass
+            if not translated:
+                try:
+                    from deep_translator import MyMemoryTranslator
+                    translated = MyMemoryTranslator(source="en-US", target=target_lang).translate(text)
+                except Exception:
+                    pass
+            if translated:
+                text = translated
+            # If both fail, keep English text — audio still plays
         clean = tempfile.mktemp(suffix=".wav")
         try:
-            await _tts(text, voice_id, clean)
+            # Split into sentences and add natural pauses
+            import re as _re
+            sentences = [s.strip() for s in _re.split(r'(?<=[.!?])\s+', text) if s.strip()]
+            if len(sentences) > 1:
+                parts = []
+                for i, sent in enumerate(sentences):
+                    part = tempfile.mktemp(suffix=f"_{i}.wav")
+                    await _tts(sent, voice_id, part)
+                    parts.append(part)
+                # Concatenate with 350ms silence between
+                concat_list = tempfile.mktemp(suffix=".txt")
+                with open(concat_list, "w") as f:
+                    for i, part in enumerate(parts):
+                        f.write(f"file '{part}'\n")
+                        if i < len(parts) - 1:
+                            sil = tempfile.mktemp(suffix=f"_sil_{i}.wav")
+                            subprocess.run([FFMPEG, "-y", "-f", "lavfi",
+                                            "-i", "anullsrc=r=24000:cl=mono",
+                                            "-t", "0.35", sil], check=True, capture_output=True)
+                            f.write(f"file '{sil}'\n")
+                subprocess.run([FFMPEG, "-y", "-f", "concat", "-safe", "0",
+                                "-i", concat_list, "-c", "copy", clean],
+                               check=True, capture_output=True)
+            else:
+                await _tts(text, voice_id, clean)
         except Exception as e:
             return {"stage": "tts", "error": str(e), "trace": traceback.format_exc()[-1000:]}, 500
         try:
