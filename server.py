@@ -136,7 +136,7 @@ def _translate(text, target):
     lang_name = _LANG_NAMES.get(target, target)
     try:
         r = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[
                 {"role": "system", "content": f"Translate the user's English text to {lang_name}. Reply with ONLY the translation."},
                 {"role": "user", "content": text},
