@@ -1,4 +1,4 @@
-import asyncio, os, subprocess, tempfile
+import asyncio, os, subprocess, tempfile, traceback
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,12 +56,24 @@ async def transform(audio: UploadFile = File(...), profile: str = Form(...)):
         f.write(await audio.read())
         inp = f.name
     try:
-        text = _transcribe(inp)
+        try:
+            text = _transcribe(inp)
+        except Exception as e:
+            return {"stage": "transcribe", "error": str(e), "type": type(e).__name__, "trace": traceback.format_exc()[-2000:]}, 500
+
         if not text:
             raise HTTPException(400, "No speech detected.")
+
         clean = tempfile.mktemp(suffix=".wav")
-        asyncio.run(_tts(text, VOICES[profile], clean))
-        return FileResponse(_degrade(clean), media_type="audio/ogg", filename="accent.ogg")
+        try:
+            asyncio.run(_tts(text, VOICES[profile], clean))
+        except Exception as e:
+            return {"stage": "tts", "error": str(e), "type": type(e).__name__, "trace": traceback.format_exc()[-2000:]}, 500
+
+        try:
+            return FileResponse(_degrade(clean), media_type="audio/ogg", filename="accent.ogg")
+        except Exception as e:
+            return {"stage": "ffmpeg", "error": str(e), "type": type(e).__name__, "trace": traceback.format_exc()[-2000:]}, 500
     finally:
         try: os.unlink(inp)
         except: pass
