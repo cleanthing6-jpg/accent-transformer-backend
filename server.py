@@ -126,7 +126,27 @@ def _transcribe(path, lang="en"):
                 model="whisper-large-v3-turbo", response_format="verbose_json")
             return (r.text or "").strip(), getattr(r, "language", "unknown") or "unknown"
 
+_LANG_NAMES = {
+    "fr": "French", "de": "German", "es": "Spanish", "it": "Italian",
+    "pt": "Portuguese", "ar": "Arabic", "hi": "Hindi", "zh-CN": "Simplified Chinese",
+    "ja": "Japanese", "ko": "Korean", "ru": "Russian",
+}
+
 def _translate(text, target):
+    lang_name = _LANG_NAMES.get(target, target)
+    try:
+        r = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": f"Translate the user's English text to {lang_name}. Reply with ONLY the translation."},
+                {"role": "user", "content": text},
+            ],
+            temperature=0.2, max_tokens=1000,
+        )
+        t = r.choices[0].message.content.strip()
+        if t: return t
+    except Exception:
+        pass
     for fn in (
         lambda: GoogleTranslator(source="en", target=target).translate(text),
         lambda: __import__("deep_translator").MyMemoryTranslator(source="en-US", target=target).translate(text),
