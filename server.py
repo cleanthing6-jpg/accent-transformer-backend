@@ -66,7 +66,7 @@ async def transform(audio: UploadFile = File(...), profile: str = Form(...)):
 
         clean = tempfile.mktemp(suffix=".wav")
         try:
-            asyncio.run(_tts(text, VOICES[profile], clean))
+            await _tts(text, VOICES[profile], clean)
         except Exception as e:
             return {"stage": "tts", "error": str(e), "type": type(e).__name__, "trace": traceback.format_exc()[-2000:]}, 500
 
