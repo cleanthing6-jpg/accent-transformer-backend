@@ -14,10 +14,29 @@ if not GROQ_KEY:
 groq_client = Groq(api_key=GROQ_KEY)
 
 VOICES = {
-    "US Female": "en-US-AriaNeural",
-    "US Male":   "en-US-GuyNeural",
-    "UK Female": "en-GB-SoniaNeural",
-    "UK Male":   "en-GB-RyanNeural",
+    "US Female · Ava (Warm)":             "en-US-AvaNeural",
+    "US Female · Emma (Cheerful)":        "en-US-EmmaNeural",
+    "US Female · Jenny (Soft)":           "en-US-JennyNeural",
+    "US Female · Aria (Professional)":    "en-US-AriaNeural",
+    "US Female · Michelle (Energetic)":   "en-US-MichelleNeural",
+    "US Female · Ana (Youthful)":         "en-US-AnaNeural",
+    "US Male · Andrew (Natural)":         "en-US-AndrewNeural",
+    "US Male · Brian (Casual)":           "en-US-BrianNeural",
+    "US Male · Guy (Passionate)":         "en-US-GuyNeural",
+    "US Male · Christopher (Authoritative)": "en-US-ChristopherNeural",
+    "US Male · Eric (Rational)":          "en-US-EricNeural",
+    "US Male · Steffan (Lively)":         "en-US-SteffanNeural",
+    "UK Female · Sonia (Warm)":           "en-GB-SoniaNeural",
+    "UK Female · Libby (Enthusiastic)":   "en-GB-LibbyNeural",
+    "UK Female · Maisie (Youthful)":      "en-GB-MaisieNeural",
+    "UK Male · Ryan (Natural)":           "en-GB-RyanNeural",
+    "UK Male · Thomas (Refined)":         "en-GB-ThomasNeural",
+    "AU Female · Natasha (Assertive)":    "en-AU-NatashaNeural",
+    "AU Male · William (Laid-back)":      "en-AU-WilliamNeural",
+    "IN Female · Neerja (Warm)":          "en-IN-NeerjaNeural",
+    "IN Male · Prabhat (Steady)":         "en-IN-PrabhatNeural",
+    "NG Female · Ezinne (Warm)":          "en-NG-EzinneNeural",
+    "NG Male · Abeo (Steady)":            "en-NG-AbeoNeural",
 }
 
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
