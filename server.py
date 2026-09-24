@@ -26,13 +26,36 @@ async def _tts(text, voice, out):
     await edge_tts.Communicate(text, voice).save(out)
 
 def _degrade(wav_in):
+    """Degrade to real phone-mic voice note: band-limit, compress, add room tone, 16kbps Opus."""
     out = tempfile.mktemp(suffix=".ogg")
+    filter_graph = (
+        # Band-limit to phone range (real mics cut more aggressively than PSTN)
+        "[0:a]highpass=f=200,lowpass=f=3200,"
+        # Hard compression simulating phone AGC pumping
+        "acompressor=threshold=-22dB:ratio=8:attack=3:release=120:makeup=2,"
+        # Small-room reverb (early reflections of a real space)
+        "aecho=0.85:0.9:8:0.15,"
+        # Soft clip a touch (phone mic preamp overload)
+        "alimiter=level_in=1:level_out=0.97:limit=0.97[v];"
+        # Pink noise bed = mic self-noise + room tone
+        "[1:a]volume=0.012[n];"
+        # Mix voice (loud) + noise (quiet)
+        "[v][n]amix=inputs=2:duration=first:weights=1 1[out]"
+    )
     subprocess.run([
-        FFMPEG, "-y", "-i", wav_in,
-        "-af", "highpass=f=300,lowpass=f=3400,acompressor=threshold=-18dB:ratio=4:attack=5:release=50",
-        "-ar", "48000", "-ac", "1",
-        "-c:a", "libopus", "-b:a", "32k", "-vbr", "on",
-        "-application", "voip", "-compression_level", "10", out,
+        FFMPEG, "-y",
+        "-i", wav_in,
+        "-f", "lavfi", "-i", "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+        "-filter_complex", filter_graph,
+        "-map", "[out]",
+        "-ar", "16000",              # WhatsApp wideband rate
+        "-ac", "1",
+        "-c:a", "libopus",
+        "-b:a", "16k",               # WhatsApp low-end bitrate
+        "-vbr", "on",
+        "-application", "voip",
+        "-compression_level", "10",
+        out,
     ], check=True, capture_output=True)
     return out
 
