@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import edge_tts, imageio_ffmpeg
 from groq import Groq
+from gradio_client import Client, handle_file
 from deep_translator import GoogleTranslator
 
 app = FastAPI()
@@ -70,6 +71,42 @@ ENGLISH_VOICES = {
     "UK Female": "en-GB-SoniaNeural",
     "UK Male":   "en-GB-RyanNeural",
 }
+
+
+REFERENCE_MAP = {
+    "US Female": "references/us_female.mp3",
+    "US Male":   "references/us_male.mp3",
+    "UK Female": "references/uk_female.mp3",
+    "UK Male":   "references/uk_male.mp3",
+}
+
+_omnivoice_client = None
+
+def _omnivoice_client_get():
+    global _omnivoice_client
+    if _omnivoice_client is None:
+        _omnivoice_client = Client("k2-fsa/OmniVoice")
+    return _omnivoice_client
+
+def _omnivoice_speak(text: str, profile: str) -> str:
+    """Speak text in the reference voice using OmniVoice Space. Returns WAV path."""
+    ref_path = REFERENCE_MAP.get(profile)
+    if not ref_path or not os.path.exists(ref_path):
+        raise RuntimeError(f"Reference missing for {profile}")
+
+    client = _omnivoice_client_get()
+    result = client.predict(
+        ref_audio=handle_file(ref_path),
+        ref_text="",
+        language="Auto",
+        instruct="female, young adult, high pitch, american accent" if "Female" in profile else "male, young adult, low pitch, american accent",
+        text=text,
+        api_name="/generate",
+    )
+    # gradio_client returns a path or dict; normalize
+    if isinstance(result, dict):
+        return result.get("path") or result.get("name")
+    return result
 
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 

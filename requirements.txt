@@ -5,3 +5,4 @@ edge-tts
 groq
 imageio-ffmpeg
 deep-translator
+gradio_client
