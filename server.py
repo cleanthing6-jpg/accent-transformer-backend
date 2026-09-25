@@ -75,7 +75,7 @@ ENGLISH_VOICES = {
 
 REFERENCE_MAP = {
     "US Female": "references/us_female.mp3",
-    "US Male":   "references/us_male.mp3",
+    "US Male":   "references/us_male.wav",
     "UK Female": "references/uk_female.mp3",
     "UK Male":   "references/uk_male.mp3",
 }
@@ -305,7 +305,14 @@ async def transform(audio: UploadFile = File(...), profile: str = Form(...)):
             if t: text = t
         clean = tempfile.mktemp(suffix=".wav")
         try:
-            await _tts(text, voice_id, clean)
+            pl = profile.lower()
+            if "uk" in pl and "female" in pl:   ref_profile = "UK Female"
+            elif "uk" in pl and "male" in pl:   ref_profile = "UK Male"
+            elif "us" in pl and "female" in pl: ref_profile = "US Female"
+            else:                                ref_profile = "US Male"
+            converted = _omnivoice_speak(text, ref_profile)
+            import shutil as _sh
+            _sh.copy(converted, clean)
         except Exception as e:
             return {"stage": "tts", "error": str(e)}, 500
         try:
