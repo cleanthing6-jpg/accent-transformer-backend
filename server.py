@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import edge_tts, imageio_ffmpeg
 from groq import Groq
+import requests as _requests
 from gradio_client import Client, handle_file
 from deep_translator import GoogleTranslator
 
@@ -134,8 +135,66 @@ def _save_audio(opus_path):
             except: pass
     return aid
 
+FISH_API_KEY = os.environ.get("FISH_API_KEY", "")
+FISH_VOICES = {
+    "US Female": "d44221f63f424d2994297641fd16d6d2",
+    "US Male":   "a0b58da2ad944cc99af85b71eb759bcf",
+    "UK Female": "b5d844335ba242b2a1a9424dbba9412f",
+    "UK Male":   "d4fb5fdea3754b4f8d8a06b01f6a6d04",
+}
+
+def _profile_key(profile):
+    pl = (profile or "").lower()
+    if "uk" in pl and "female" in pl: return "UK Female"
+    if "uk" in pl and "male" in pl:   return "UK Male"
+    if "us" in pl and "female" in pl: return "US Female"
+    return "US Male"
+
 async def _tts(text, voice, out):
-    await edge_tts.Communicate(text, voice, rate="-12%", pitch="-2Hz").save(out)
+    # voice is the old edge-tts voice id; try to map by current profile instead
+    # We look up the Fish voice via the global CURRENT_PROFILE set by /transform
+    profile = globals().get("_CURRENT_PROFILE", "US Female")
+    key = _profile_key(profile)
+    voice_id = FISH_VOICES.get(key)
+    if not voice_id:
+        raise RuntimeError(f"No Fish voice for {key}")
+    if not FISH_API_KEY:
+        raise RuntimeError("FISH_API_KEY not set")
+    chunks = []
+    t = text
+    while t:
+        chunks.append(t[:480])
+        t = t[480:]
+    parts = []
+    for i, chunk in enumerate(chunks):
+        r = _requests.post(
+            "https://api.fish.audio/v1/tts",
+            headers={"Authorization": f"Bearer {FISH_API_KEY}", "Content-Type": "application/json"},
+            json={"text": chunk, "reference_id": voice_id, "format": "mp3", "mp3_bitrate": 128,
+                  "normalize": True, "latency": "normal"},
+            timeout=180,
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"Fish {r.status_code}: {r.text[:300]}")
+        part = tempfile.mktemp(suffix=f"_{i}.mp3")
+        with open(part, "wb") as f:
+            f.write(r.content)
+        parts.append(part)
+    if len(parts) == 1:
+        subprocess.run([FFMPEG, "-y", "-i", parts[0], "-ar", "22050", "-ac", "1", out],
+                       check=True, capture_output=True)
+    else:
+        lst = tempfile.mktemp(suffix=".txt")
+        with open(lst, "w") as f:
+            for part in parts:
+                f.write(f"file '{part}'\n")
+        subprocess.run([FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", lst,
+                        "-ar", "22050", "-ac", "1", out], check=True, capture_output=True)
+        try: os.unlink(lst)
+        except: pass
+    for part in parts:
+        try: os.unlink(part)
+        except: pass
 
 def _degrade(wav_in):
     """WhatsApp-native voice note: 16kHz mono Opus in OGG, with duration metadata."""
@@ -317,6 +376,7 @@ async def transform(audio: UploadFile = File(...), profile: str = Form(...)):
             if t: text = t
         clean = tempfile.mktemp(suffix=".wav")
         try:
+            globals()["_CURRENT_PROFILE"] = profile
             await _tts(text, voice_id, clean)
         except Exception as e:
             return {"stage": "tts", "error": str(e)}, 500
