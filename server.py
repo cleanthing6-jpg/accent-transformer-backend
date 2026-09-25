@@ -104,7 +104,7 @@ def _omnivoice_speak(text: str, profile: str) -> str:
     result = client.predict(
         text=text,
         lang="Auto",
-        ref_aud=handle_file(ref_path),
+        ref_aud=ref_path,
         ref_text="",
         instruct="female, young adult, high pitch, american accent" if "Female" in profile else "male, young adult, low pitch, american accent",
         ns=32,
