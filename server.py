@@ -89,12 +89,13 @@ async def _tts(text, voice, out):
     await edge_tts.Communicate(text, voice, rate="-12%", pitch="-2Hz").save(out)
 
 def _degrade(wav_in):
-    out = tempfile.mktemp(suffix=".opus")
+    """WhatsApp-native voice note: 16kHz mono Opus in OGG, with duration metadata."""
+    out = tempfile.mktemp(suffix=".ogg")
     subprocess.run([
         FFMPEG, "-y",
         "-i", wav_in,
-        "-f", "lavfi", "-i", "anoisesrc=color=pink:sample_rate=48000:amplitude=0.35",
-        "-f", "lavfi", "-i", "anoisesrc=color=brown:sample_rate=48000:amplitude=0.2",
+        "-f", "lavfi", "-i", "anoisesrc=color=pink:sample_rate=16000:amplitude=0.35",
+        "-f", "lavfi", "-i", "anoisesrc=color=brown:sample_rate=16000:amplitude=0.2",
         "-filter_complex",
         "[0:a]highpass=f=250,lowpass=f=3400,"
         "acompressor=threshold=-26dB:ratio=10:attack=5:release=150:makeup=3,"
@@ -104,11 +105,13 @@ def _degrade(wav_in):
         "[2:a]volume=0.012[handling];"
         "[voice][room][handling]amix=inputs=3:duration=first:weights=1 0.7 0.4[out]",
         "-map", "[out]",
-        "-ar", "48000", "-ac", "1",
-        "-c:a", "libopus", "-b:a", "24k", "-vbr", "on",
-        "-application", "voip", "-compression_level", "10",
-        "-map_metadata", "-1",
-        "-avoid_negative_ts", "make_zero",
+        "-ar", "16000",
+        "-ac", "1",
+        "-c:a", "libopus",
+        "-b:a", "24k",
+        "-vbr", "on",
+        "-application", "voip",
+        "-compression_level", "10",
         out,
     ], check=True, capture_output=True)
     return out
