@@ -95,15 +95,23 @@ def _omnivoice_speak(text: str, profile: str) -> str:
         raise RuntimeError(f"Reference missing for {profile}")
 
     client = _omnivoice_client_get()
+    # Estimate duration: ~1 sec per 12 characters, minimum 3s
+    duration = max(3.0, min(30.0, len(text) / 12.0))
     result = client.predict(
-        ref_audio=handle_file(ref_path),
-        ref_text="",
-        language="Auto",
-        instruct="female, young adult, high pitch, american accent" if "Female" in profile else "male, young adult, low pitch, american accent",
         text=text,
-        api_name="/generate",
+        lang="Auto",
+        ref_aud=handle_file(ref_path),
+        ref_text="",
+        instruct="female, young adult, high pitch, american accent" if "Female" in profile else "male, young adult, low pitch, american accent",
+        ns=32,
+        gs=2.0,
+        dn=True,
+        sp=1.0,
+        du=duration,
+        pp=True,
+        po=True,
+        api_name="/_clone_fn",
     )
-    # gradio_client returns a path or dict; normalize
     if isinstance(result, dict):
         return result.get("path") or result.get("name")
     return result
