@@ -7,6 +7,9 @@ from groq import Groq
 from gradio_client import Client, handle_file
 from deep_translator import GoogleTranslator
 
+import os as _os
+_HERE = _os.path.dirname(_os.path.abspath(__file__))
+
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -73,11 +76,12 @@ ENGLISH_VOICES = {
 }
 
 
+_REF_DIR = _os.path.join(_HERE, "references")
 REFERENCE_MAP = {
-    "US Female": "references/us_female.mp3",
-    "US Male":   "references/us_male.wav",
-    "UK Female": "references/uk_female.mp3",
-    "UK Male":   "references/uk_male.mp3",
+    "US Female": _os.path.join(_REF_DIR, "us_female.mp3"),
+    "US Male":   _os.path.join(_REF_DIR, "us_male.wav"),
+    "UK Female": _os.path.join(_REF_DIR, "uk_female.mp3"),
+    "UK Male":   _os.path.join(_REF_DIR, "uk_male.mp3"),
 }
 
 _omnivoice_client = None
