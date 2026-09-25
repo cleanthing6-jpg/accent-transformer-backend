@@ -106,7 +106,7 @@ def _omnivoice_speak(text: str, profile: str) -> str:
         lang="Auto",
         ref_aud=ref_path,
         ref_text="",
-        instruct="female, young adult, high pitch, american accent" if "Female" in profile else "male, young adult, low pitch, american accent",
+        instruct="",
         ns=32,
         gs=2.0,
         dn=True,
